@@ -438,3 +438,6 @@ verify_jwt = true
 
 [functions.bill-reminders]
 verify_jwt = false
+
+[functions.spending-digest]
+verify_jwt = false
