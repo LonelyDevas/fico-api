@@ -435,3 +435,6 @@ verify_jwt = true
 
 [functions.finance-insight]
 verify_jwt = true
+
+[functions.bill-reminders]
+verify_jwt = false
