@@ -8,12 +8,16 @@ import { timingSafeEqual } from "node:crypto";
 // ---------- config ----------
 const env = (k: string, d = "") => (process.env[k] ?? d).trim();
 
-const DATABASE_URL = env("DATABASE_URL");
+const PROJECT_REF = env("SUPABASE_PROJECT_REF");
+const DB_PASSWORD = env("FICO_DB_PASSWORD");
 const AUTH_TOKEN = env("MCP_AUTH_TOKEN");
 const OWNER_ID = env("FICO_OWNER_ID");
 const TZ = env("FICO_TIMEZONE", "Asia/Manila");
 
-if (!DATABASE_URL) throw new Error("DATABASE_URL is required");
+if (!env("DATABASE_URL") && !(PROJECT_REF && DB_PASSWORD)) {
+  throw new Error("Set DATABASE_URL, or SUPABASE_PROJECT_REF and FICO_DB_PASSWORD");
+}
+if (PROJECT_REF && !/^[a-z0-9]{20}$/.test(PROJECT_REF)) throw new Error("SUPABASE_PROJECT_REF looks wrong");
 if (!/^[A-Za-z0-9_-]{32,}$/.test(AUTH_TOKEN)) {
   throw new Error("MCP_AUTH_TOKEN is required: 32+ characters of letters, digits, - or _ (openssl rand -hex 32)");
 }
@@ -28,11 +32,50 @@ pg.types.setTypeParser(20, (v) => parseInt(v, 10)); // bigint (count)
 pg.types.setTypeParser(1082, (v) => v); // date
 
 // ---------- database (read-only by construction) ----------
-const pool = new pg.Pool({
-  connectionString: DATABASE_URL,
-  max: 3,
-  ssl: /localhost|127\.0\.0\.1/.test(DATABASE_URL) ? undefined : { rejectUnauthorized: false },
-});
+const sslFor = (url: string) =>
+  /localhost|127\.0\.0\.1/.test(url) ? undefined : { rejectUnauthorized: false };
+
+// With only a project ref and password, find the project's Supabase pooler
+// by trying each region's pooler host; the right one is the one that accepts
+// the login (the others answer "Tenant or user not found").
+const REGIONS = [
+  "ap-southeast-1", "ap-southeast-2", "ap-northeast-1", "ap-northeast-2", "ap-south-1",
+  "us-east-1", "us-east-2", "us-west-1", "us-west-2", "ca-central-1", "sa-east-1",
+  "eu-west-1", "eu-west-2", "eu-west-3", "eu-central-1", "eu-central-2", "eu-north-1",
+];
+async function findDatabaseUrl(): Promise<string> {
+  const given = env("DATABASE_URL");
+  if (given) return given;
+  const user = encodeURIComponent(`fico_readonly.${PROJECT_REF}`);
+  const pass = encodeURIComponent(DB_PASSWORD);
+  const candidates = ["aws-0", "aws-1"].flatMap((p) =>
+    REGIONS.map((r) => `postgresql://${user}:${pass}@${p}-${r}.pooler.supabase.com:5432/postgres`)
+  );
+  const errors: string[] = [];
+  const found = await Promise.any(
+    candidates.map(async (url) => {
+      const client = new pg.Client({ connectionString: url, ssl: sslFor(url), connectionTimeoutMillis: 10000 });
+      try {
+        await client.connect();
+        await client.query("SELECT 1");
+        return url;
+      } catch (e) {
+        errors.push(`${new URL(url).hostname}: ${(e as Error).message}`);
+        throw e;
+      } finally {
+        await client.end().catch(() => {});
+      }
+    })
+  ).catch(() => {
+    const wrongPassword = errors.find((e) => /password authentication failed/i.test(e));
+    throw new Error(wrongPassword ?? `No Supabase pooler accepted the login:\n${errors.join("\n")}`);
+  });
+  console.log(`Using database at ${new URL(found).hostname}`);
+  return found;
+}
+
+const DATABASE_URL = await findDatabaseUrl();
+const pool = new pg.Pool({ connectionString: DATABASE_URL, max: 3, ssl: sslFor(DATABASE_URL) });
 
 // Every query runs in a READ ONLY transaction with a timeout, so even a
 // misconfigured role cannot write. $1 is always the owner id and $2 the

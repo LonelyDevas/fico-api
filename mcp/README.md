@@ -36,7 +36,7 @@ limits it to your own rows, so it can't see other Fico users or change anything.
 ## 2. Configure and test locally (optional)
 
 ```bash
-cp .env.example .env     # fill in the three required values
+cp .env.example .env     # fill in the required values
 npm install
 npm run build
 set -a; . ./.env; set +a
@@ -53,7 +53,7 @@ curl -s -X POST localhost:3000/mcp/$MCP_AUTH_TOKEN \
 In Render choose New > Blueprint, pick the `fico-api` repo and set the
 Blueprint path to `mcp/render.yaml`. It creates a separate `fico-mcp` service
 (root directory `mcp/`), so the main API is untouched. Render asks
-for `DATABASE_URL` and `FICO_OWNER_ID` and generates `MCP_AUTH_TOKEN` for you
+for `SUPABASE_PROJECT_REF`, `FICO_DB_PASSWORD` and `FICO_OWNER_ID` and generates `MCP_AUTH_TOKEN` for you
 (copy it from the service's Environment tab). You get a URL like
 `https://fico-mcp.onrender.com`.
 

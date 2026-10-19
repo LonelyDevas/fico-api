@@ -9,7 +9,9 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      - key: DATABASE_URL
+      - key: SUPABASE_PROJECT_REF
+        sync: false
+      - key: FICO_DB_PASSWORD
         sync: false
       - key: FICO_OWNER_ID
         sync: false
