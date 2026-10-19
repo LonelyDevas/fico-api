@@ -29,7 +29,8 @@ export default [
       'package-lock.json',
       '.vscode/**',
       '.env',
-      '.idea/**'
+      '.idea/**',
+      'mcp/**'
     ]
   },
   // JavaScript files (CommonJS)
