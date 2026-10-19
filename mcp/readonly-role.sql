@@ -14,12 +14,9 @@ begin
   grant usage on schema public to fico_readonly;
   grant select on public.wallets, public.categories, public.transactions, public.bills,
     public.budgets, public.obligations, public.investments, public.profiles to fico_readonly;
-  begin
-    grant usage on schema auth to fico_readonly;
-    grant execute on function auth.uid() to fico_readonly;
-  exception when insufficient_privilege then
-    grant anon to fico_readonly;
-  end;
+  -- Fico's own RLS policies call auth.uid(), so the role needs what anon has.
+  -- (On Supabase a direct grant on schema auth is silently ignored.)
+  grant anon to fico_readonly;
 
   foreach t in array array['wallets','transactions','bills','budgets','obligations','investments'] loop
     execute format('create policy fico_mcp_read on public.%I for select to fico_readonly using (owner_id = %L)', t, uid);
