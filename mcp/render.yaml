@@ -16,6 +16,6 @@ services:
       - key: FICO_OWNER_ID
         sync: false
       - key: MCP_AUTH_TOKEN
-        generateValue: true
+        sync: false
       - key: FICO_TIMEZONE
         value: Asia/Manila

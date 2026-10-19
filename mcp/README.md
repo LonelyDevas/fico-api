@@ -53,8 +53,9 @@ curl -s -X POST localhost:3000/mcp/$MCP_AUTH_TOKEN \
 In Render choose New > Blueprint, pick the `fico-api` repo and set the
 Blueprint path to `mcp/render.yaml`. It creates a separate `fico-mcp` service
 (root directory `mcp/`), so the main API is untouched. Render asks
-for `SUPABASE_PROJECT_REF`, `FICO_DB_PASSWORD` and `FICO_OWNER_ID` and generates `MCP_AUTH_TOKEN` for you
-(copy it from the service's Environment tab). You get a URL like
+for `SUPABASE_PROJECT_REF`, `FICO_DB_PASSWORD`, `FICO_OWNER_ID` and `MCP_AUTH_TOKEN`
+(use `openssl rand -hex 32`; Render's own generated values contain `/` and `+`,
+which don't work in a URL). You get a URL like
 `https://fico-mcp.onrender.com`.
 
 ## 4. Connect to Claude
