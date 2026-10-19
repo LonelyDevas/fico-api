@@ -29,11 +29,9 @@ credit card's balance is treated as money owed. Months are counted in
 
 ## 1. Create the read-only database role
 
-Open `readonly-role.sql`, put in your user id and a strong password, and run it
-in the Supabase SQL editor. The role can only `SELECT`, and row level security
+Open `readonly-role.sql`, put in your Fico username and a new password, and run
+it in the Supabase SQL editor. It prints your user id, which is `FICO_OWNER_ID`. The role can only `SELECT`, and row level security
 limits it to your own rows, so it can't see other Fico users or change anything.
-
-Your user id: Supabase dashboard > Authentication > Users > your row > User UID.
 
 ## 2. Configure and test locally (optional)
 
