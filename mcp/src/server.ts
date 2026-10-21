@@ -4,6 +4,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { timingSafeEqual } from "node:crypto";
+import { registerPlannedItems } from "./planned-items.js";
 
 // ---------- config ----------
 const env = (k: string, d = "") => (process.env[k] ?? d).trim();
@@ -593,6 +594,8 @@ function buildServer() {
       };
     })
   );
+
+  registerPlannedItems(server, { query, safe, dateStr, round, today, yearEnd });
 
   return server;
 }

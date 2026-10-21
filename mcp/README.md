@@ -19,6 +19,7 @@ help you plan savings. It is built for Fico's real schema (the migrations in
 | `budgets_status` | Active budgets: limit, spent, left, percent used. |
 | `debts_and_loans` | Money you owe and money you lent, with installments and due dates. |
 | `investments` | Investments with amount in, current value and gain. |
+| `planned_items` | One-off income and expenses you expect (13th month, gifts, trips) with low and high estimates, plus low-case and high-case totals. You add them on Fico's Planned page. |
 | `savings_forecast` | How much you can save by a date (default next January 1), with the inputs behind the number. |
 
 How it reads Fico's data: only `completed` transactions count (pending rows are
@@ -32,6 +33,9 @@ credit card's balance is treated as money owed. Months are counted in
 Open `readonly-role.sql`, put in your Fico username and a new password, and run
 it in the Supabase SQL editor. It prints your user id, which is `FICO_OWNER_ID`. The role can only `SELECT`, and row level security
 limits it to your own rows, so it can't see other Fico users or change anything.
+
+Already made the role before planned items existed? Run migration `0051_planned_items.sql`,
+then `planned-items-access.sql` with your username, so the role can read them too.
 
 ## 2. Configure and test locally (optional)
 
