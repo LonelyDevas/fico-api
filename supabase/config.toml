@@ -441,3 +441,6 @@ verify_jwt = false
 
 [functions.spending-digest]
 verify_jwt = false
+
+[functions.crypto-prices]
+verify_jwt = false

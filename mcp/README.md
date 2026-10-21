@@ -21,6 +21,7 @@ help you plan savings. It is built for Fico's real schema (the migrations in
 | `debts_and_loans` | Money you owe and money you lent, with installments and due dates. |
 | `investments` | Investments with amount in, current value and gain. |
 | `planned_items` | One-off income and expenses you expect (13th month, gifts, trips) with low and high estimates, plus low-case and high-case totals. You add them on Fico's Planned page. |
+| `investments` | Investments with amount in (cost basis), current value and gain. Crypto uses the live price. |
 | `savings_forecast` | How much you can save by a date (default next January 1), with the inputs behind the number. |
 
 How it reads Fico's data: only `completed` transactions count (pending rows are
@@ -28,6 +29,15 @@ future bill payments, cancelled ones never happened), income and expense come
 from the `type` column, transfers are excluded from income and spending, and a
 credit card's balance is treated as money owed. Months are counted in
 `FICO_TIMEZONE` (default Asia/Manila).
+
+Crypto holdings are worth quantity × the live CoinGecko price in PHP, looked
+up by the holding's coin (its CoinGecko id, or its ticker). The amount put in
+stays the cost basis, so the gain is current value minus amount in. If
+CoinGecko can't be reached, the last known value is used and the holding is
+marked `stale`, with `priced_at` saying how old the price is. Fico's
+`crypto-prices` function (`../supabase/functions/crypto-prices`) also stores
+the latest value in the database every 30 minutes, so the app and other
+reports see it too.
 
 ## 1. Create the read-only database role
 
