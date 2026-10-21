@@ -19,7 +19,6 @@ help you plan savings. It is built for Fico's real schema (the migrations in
 | `safe_to_spend` | Cash on hand minus bills due before the next salary (or a date you give), as a total and per day, with a 20% buffer option. |
 | `budgets_status` | Active budgets: limit, spent, left, percent used. |
 | `debts_and_loans` | Money you owe and money you lent, with installments and due dates. |
-| `investments` | Investments with amount in, current value and gain. |
 | `planned_items` | One-off income and expenses you expect (13th month, gifts, trips) with low and high estimates, plus low-case and high-case totals. You add them on Fico's Planned page. |
 | `investments` | Investments with amount in (cost basis), current value and gain. Crypto uses the live price. |
 | `savings_forecast` | How much you can save by a date (default next January 1), with the inputs behind the number. |
