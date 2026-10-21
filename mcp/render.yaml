@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: fico-mcp
+    runtime: node
+    rootDir: mcp
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: SUPABASE_PROJECT_REF
+        sync: false
+      - key: FICO_DB_PASSWORD
+        sync: false
+      - key: FICO_OWNER_ID
+        sync: false
+      - key: MCP_AUTH_TOKEN
+        sync: false
+      - key: FICO_TIMEZONE
+        value: Asia/Manila
