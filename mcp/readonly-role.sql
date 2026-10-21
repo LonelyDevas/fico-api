@@ -16,12 +16,14 @@ begin
     public.budgets, public.obligations, public.investments, public.profiles,
     public.planned_items to fico_readonly;
     public.budgets, public.obligations, public.investments, public.profiles, public.goals to fico_readonly;
+    public.net_worth_snapshots to fico_readonly;
   -- Fico's own RLS policies call auth.uid(), so the role needs what anon has.
   -- (On Supabase a direct grant on schema auth is silently ignored.)
   grant anon to fico_readonly;
 
   foreach t in array array['wallets','transactions','bills','budgets','obligations','investments','planned_items'] loop
   foreach t in array array['wallets','transactions','bills','budgets','obligations','investments','goals'] loop
+  foreach t in array array['wallets','transactions','bills','budgets','obligations','investments','net_worth_snapshots'] loop
     execute format('create policy fico_mcp_read on public.%I for select to fico_readonly using (owner_id = %L)', t, uid);
   end loop;
   execute format('create policy fico_mcp_read on public.categories for select to fico_readonly using (owner_id = %L or owner_id is null)', uid);
