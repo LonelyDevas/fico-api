@@ -5,6 +5,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { timingSafeEqual } from "node:crypto";
 import { registerPlannedItems } from "./planned-items.js";
+import { registerSafeToSpend } from "./tools/safe-to-spend.js";
+import { valueHoldings, type Holding } from "./crypto.js";
+import { registerGoalsTools } from "./goals.js";
+import { baselineSpending, registerBaselineTools } from "./baseline.js";
 
 // ---------- config ----------
 const env = (k: string, d = "") => (process.env[k] ?? d).trim();
@@ -224,6 +228,20 @@ async function scheduled(until: string) {
   };
 }
 
+// Active investments with crypto holdings valued at the live price (see crypto.ts).
+async function activeInvestments() {
+  const rows = await query<Holding & { name: string; principal_amount: number }>(
+    `SELECT name, type::text AS type, platform, principal_amount, current_value, dividends_received,
+            expected_return_rate, (maturity_date AT TIME ZONE $2)::date AS maturity_date, currency,
+            coin_id, coin_symbol, quantity,
+            (to_jsonb(i) ->> 'last_price')::numeric AS stored_price,
+            to_jsonb(i) ->> 'price_updated_at' AS stored_priced_at
+     FROM public.investments i WHERE owner_id = $1 AND status = 'active'`
+  );
+  const values = await valueHoldings(rows);
+  return rows.map(({ coin_id, stored_price, stored_priced_at, ...r }, i) => ({ ...r, ...values[i] }));
+}
+
 // ---------- MCP server ----------
 function buildServer() {
   const server = new McpServer({ name: "fico-mcp", version: "2.0.0" });
@@ -239,10 +257,11 @@ function buildServer() {
          FROM public.wallets WHERE owner_id = $1 AND status = 'active'
          ORDER BY type, balance DESC`
       );
+      const holdings = await activeInvestments();
+      const investments = holdings.reduce((s, h) => s + h.current_value, 0);
+      const stale = holdings.filter((h) => h.stale).map((h) => h.name);
       const [extra] = await query(
         `SELECT
-           (SELECT COALESCE(SUM(current_value), 0) FROM public.investments
-             WHERE owner_id = $1 AND status = 'active') AS investments,
            (SELECT COALESCE(SUM(remaining_balance), 0) FROM public.obligations
              WHERE owner_id = $1 AND direction = 'debt' AND status IN ('active', 'partially_paid', 'defaulted')) AS debts,
            (SELECT COALESCE(SUM(remaining_balance), 0) FROM public.obligations
@@ -258,12 +277,14 @@ function buildServer() {
           cash_on_hand: cash,
           savings,
           credit_card_owed: cardOwed,
-          investments: round(extra.investments),
+          investments: round(investments),
           debts_owed: round(extra.debts),
           lent_out: round(extra.lent_out),
-          net_worth: round(cash + savings + extra.investments + extra.lent_out - cardOwed - extra.debts),
+          net_worth: round(cash + savings + investments + extra.lent_out - cardOwed - extra.debts),
         },
-        note: "A credit card's balance is the amount owed on it.",
+        note:
+          "A credit card's balance is the amount owed on it." +
+          (stale.length ? ` Live prices were unavailable for ${stale.join(", ")}, so their last known value is used.` : ""),
       };
     })
   );
@@ -470,6 +491,8 @@ function buildServer() {
     })
   );
 
+  registerSafeToSpend(server, { query, scheduled, safe, today, dayBefore, round, dateStr, TODAY });
+
   server.tool(
     "budgets_status",
     "Active budgets with their limit, amount spent, amount left, percent used, period dates and categories.",
@@ -509,20 +532,13 @@ function buildServer() {
 
   server.tool(
     "investments",
-    "Active investments with amount put in, current value, gain or loss, dividends, expected return and maturity.",
+    "Active investments with amount put in (cost basis), current value, gain or loss, dividends, expected return and maturity. Crypto is valued at quantity × the live CoinGecko price; stale: true means the live price was unavailable and the last known value (as of priced_at) is shown.",
     {},
     safe(async () => {
-      const rows = await query(
-        `SELECT name, type::text AS type, platform, principal_amount, current_value, dividends_received,
-                expected_return_rate, (maturity_date AT TIME ZONE $2)::date AS maturity_date, currency,
-                coin_symbol, quantity
-         FROM public.investments WHERE owner_id = $1 AND status = 'active'
-         ORDER BY current_value DESC`
-      );
-      return rows.map((r) => ({
-        ...r,
-        gain: round(r.current_value - r.principal_amount + r.dividends_received),
-      }));
+      const rows = await activeInvestments();
+      return rows
+        .sort((a, b) => b.current_value - a.current_value)
+        .map((r) => ({ ...r, gain: round(r.current_value - r.principal_amount) }));
     })
   );
 
@@ -538,11 +554,15 @@ function buildServer() {
       const now = today();
       const rows = await monthlyRows(history_months + 1);
       const current = now.slice(0, 7);
-      const full = rows.filter((r) => r.month !== current);
+      const baseline = await baselineSpending({ query, today, round, safe }, history_months);
+      // Income is averaged over the same months as the baseline spending, so a
+      // month left out entirely (e.g. imported history) is left out of both.
+      const full = rows.filter((r) => r.month !== current && baseline.months_used.includes(r.month));
       const thisMonth = rows.find((r) => r.month === current) ?? { income: 0, expenses: 0 };
       const n = full.length || 1;
       const avgIncome = full.reduce((s, r) => s + r.income, 0) / n;
-      const avgExpenses = full.reduce((s, r) => s + r.expenses, 0) / n;
+      const rawExpenses = full.reduce((s, r) => s + r.expenses, 0) / n;
+      const avgExpenses = baseline.average_monthly.total;
       const daysLeft = Math.max(0, (Date.parse(target) - Date.parse(now)) / 86400000);
       const monthsLeft = daysLeft / (365.25 / 12);
 
@@ -560,7 +580,7 @@ function buildServer() {
            AND ${LOCAL_DATE} >= date_trunc('month', ${TODAY}) - ($3::int * INTERVAL '1 month')
            AND ${LOCAL_DATE} < date_trunc('month', ${TODAY})
          GROUP BY 1 ORDER BY 2 DESC LIMIT 5`,
-        [n]
+        [history_months]
       );
 
       const trendSavings = (avgIncome - avgExpenses) * monthsLeft;
@@ -572,6 +592,8 @@ function buildServer() {
           full_months_used: full.map((r) => r.month),
           avg_monthly_income: round(avgIncome),
           avg_monthly_expenses: round(avgExpenses),
+          avg_monthly_expenses_source: "baseline_spending (one-offs, excluded categories and card payments left out)",
+          avg_monthly_expenses_including_left_out: round(rawExpenses),
           avg_monthly_net: round(avgIncome - avgExpenses),
         },
         this_month_so_far: { income: round(thisMonth.income), expenses: round(thisMonth.expenses) },
@@ -596,6 +618,63 @@ function buildServer() {
   );
 
   registerPlannedItems(server, { query, safe, dateStr, round, today, yearEnd });
+  registerGoalsTools(server, { query, safe, round });
+  registerBaselineTools(server, { query, today, round, safe });
+  server.tool(
+    "net_worth_history",
+    "Net worth over time from Fico's daily snapshots (taken at 23:55 Manila time): net worth plus cash on hand, savings, investments, credit card owed, debts and money lent out at each point, ready to chart. Weekly and monthly use the last snapshot in each period. Also returns the change over the range.",
+    {
+      from: dateStr.optional().describe("Inclusive start, YYYY-MM-DD, default 90 days ago"),
+      until: dateStr.optional().describe("Inclusive end, YYYY-MM-DD, default today"),
+      interval: z.enum(["daily", "weekly", "monthly"]).default("daily"),
+    },
+    safe(async ({ from, until, interval }) => {
+      const end = until ?? today();
+      const start = from ?? new Date(Date.parse(end) - 90 * 86400000).toISOString().slice(0, 10);
+      const unit = { daily: "day", weekly: "week", monthly: "month" }[interval];
+      const rows = await query(
+        `SELECT DISTINCT ON (date_trunc($5, s.snapshot_date::timestamp))
+                s.snapshot_date AS date, s.net_worth, s.cash_on_hand, s.savings, s.investments,
+                s.credit_card_owed, s.debts_owed, s.lent_out, s.investments_stale
+         FROM public.net_worth_snapshots s
+         WHERE s.owner_id = $1 AND s.snapshot_date BETWEEN $3::date AND LEAST($4::date, ${TODAY})
+         ORDER BY date_trunc($5, s.snapshot_date::timestamp), s.snapshot_date DESC`,
+        [start, end, unit]
+      );
+      const points = rows.map((r) => ({
+        ...r,
+        net_worth: round(r.net_worth),
+        cash_on_hand: round(r.cash_on_hand),
+        savings: round(r.savings),
+        investments: round(r.investments),
+        credit_card_owed: round(r.credit_card_owed),
+        debts_owed: round(r.debts_owed),
+        lent_out: round(r.lent_out),
+        investments_stale: r.investments_stale || undefined,
+      }));
+      const first = points[0];
+      const last = points[points.length - 1];
+      return {
+        from: start,
+        until: end,
+        interval,
+        points,
+        change: first
+          ? {
+              from_date: first.date,
+              to_date: last.date,
+              amount: round(last.net_worth - first.net_worth),
+              percent: first.net_worth ? round(((last.net_worth - first.net_worth) / Math.abs(first.net_worth)) * 100) : null,
+            }
+          : null,
+        notes: [
+          "Net worth = cash on hand + savings + investments + lent out - credit card owed - debts, the same as accounts_overview.",
+          "investments_stale marks points where a crypto price was more than 2 hours old when the snapshot was taken.",
+          ...(points.length ? [] : ["No snapshots in this range yet. They start on the day the snapshot job was set up."]),
+        ],
+      };
+    })
+  );
 
   return server;
 }
