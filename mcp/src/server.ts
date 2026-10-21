@@ -4,6 +4,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { timingSafeEqual } from "node:crypto";
+import { baselineSpending, registerBaselineTools } from "./baseline.js";
 
 // ---------- config ----------
 const env = (k: string, d = "") => (process.env[k] ?? d).trim();
@@ -537,11 +538,15 @@ function buildServer() {
       const now = today();
       const rows = await monthlyRows(history_months + 1);
       const current = now.slice(0, 7);
-      const full = rows.filter((r) => r.month !== current);
+      const baseline = await baselineSpending({ query, today, round, safe }, history_months);
+      // Income is averaged over the same months as the baseline spending, so a
+      // month left out entirely (e.g. imported history) is left out of both.
+      const full = rows.filter((r) => r.month !== current && baseline.months_used.includes(r.month));
       const thisMonth = rows.find((r) => r.month === current) ?? { income: 0, expenses: 0 };
       const n = full.length || 1;
       const avgIncome = full.reduce((s, r) => s + r.income, 0) / n;
-      const avgExpenses = full.reduce((s, r) => s + r.expenses, 0) / n;
+      const rawExpenses = full.reduce((s, r) => s + r.expenses, 0) / n;
+      const avgExpenses = baseline.average_monthly.total;
       const daysLeft = Math.max(0, (Date.parse(target) - Date.parse(now)) / 86400000);
       const monthsLeft = daysLeft / (365.25 / 12);
 
@@ -559,7 +564,7 @@ function buildServer() {
            AND ${LOCAL_DATE} >= date_trunc('month', ${TODAY}) - ($3::int * INTERVAL '1 month')
            AND ${LOCAL_DATE} < date_trunc('month', ${TODAY})
          GROUP BY 1 ORDER BY 2 DESC LIMIT 5`,
-        [n]
+        [history_months]
       );
 
       const trendSavings = (avgIncome - avgExpenses) * monthsLeft;
@@ -571,6 +576,8 @@ function buildServer() {
           full_months_used: full.map((r) => r.month),
           avg_monthly_income: round(avgIncome),
           avg_monthly_expenses: round(avgExpenses),
+          avg_monthly_expenses_source: "baseline_spending (one-offs, excluded categories and card payments left out)",
+          avg_monthly_expenses_including_left_out: round(rawExpenses),
           avg_monthly_net: round(avgIncome - avgExpenses),
         },
         this_month_so_far: { income: round(thisMonth.income), expenses: round(thisMonth.expenses) },
@@ -593,6 +600,8 @@ function buildServer() {
       };
     })
   );
+
+  registerBaselineTools(server, { query, today, round, safe });
 
   return server;
 }

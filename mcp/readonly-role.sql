@@ -22,6 +22,7 @@ begin
     execute format('create policy fico_mcp_read on public.%I for select to fico_readonly using (owner_id = %L)', t, uid);
   end loop;
   execute format('create policy fico_mcp_read on public.categories for select to fico_readonly using (owner_id = %L or owner_id is null)', uid);
+  execute format('create policy fico_mcp_read on public.profiles for select to fico_readonly using (id = %L)', uid);
 end $$;
 
 -- This prints your user id. Copy it: it's FICO_OWNER_ID on Render.
