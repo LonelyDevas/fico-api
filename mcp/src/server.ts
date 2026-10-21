@@ -4,6 +4,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { timingSafeEqual } from "node:crypto";
+import { valueHoldings, type Holding } from "./crypto.js";
 
 // ---------- config ----------
 const env = (k: string, d = "") => (process.env[k] ?? d).trim();
@@ -223,6 +224,20 @@ async function scheduled(until: string) {
   };
 }
 
+// Active investments with crypto holdings valued at the live price (see crypto.ts).
+async function activeInvestments() {
+  const rows = await query<Holding & { name: string; principal_amount: number }>(
+    `SELECT name, type::text AS type, platform, principal_amount, current_value, dividends_received,
+            expected_return_rate, (maturity_date AT TIME ZONE $2)::date AS maturity_date, currency,
+            coin_id, coin_symbol, quantity,
+            (to_jsonb(i) ->> 'last_price')::numeric AS stored_price,
+            to_jsonb(i) ->> 'price_updated_at' AS stored_priced_at
+     FROM public.investments i WHERE owner_id = $1 AND status = 'active'`
+  );
+  const values = await valueHoldings(rows);
+  return rows.map(({ coin_id, stored_price, stored_priced_at, ...r }, i) => ({ ...r, ...values[i] }));
+}
+
 // ---------- MCP server ----------
 function buildServer() {
   const server = new McpServer({ name: "fico-mcp", version: "2.0.0" });
@@ -238,10 +253,11 @@ function buildServer() {
          FROM public.wallets WHERE owner_id = $1 AND status = 'active'
          ORDER BY type, balance DESC`
       );
+      const holdings = await activeInvestments();
+      const investments = holdings.reduce((s, h) => s + h.current_value, 0);
+      const stale = holdings.filter((h) => h.stale).map((h) => h.name);
       const [extra] = await query(
         `SELECT
-           (SELECT COALESCE(SUM(current_value), 0) FROM public.investments
-             WHERE owner_id = $1 AND status = 'active') AS investments,
            (SELECT COALESCE(SUM(remaining_balance), 0) FROM public.obligations
              WHERE owner_id = $1 AND direction = 'debt' AND status IN ('active', 'partially_paid', 'defaulted')) AS debts,
            (SELECT COALESCE(SUM(remaining_balance), 0) FROM public.obligations
@@ -257,12 +273,14 @@ function buildServer() {
           cash_on_hand: cash,
           savings,
           credit_card_owed: cardOwed,
-          investments: round(extra.investments),
+          investments: round(investments),
           debts_owed: round(extra.debts),
           lent_out: round(extra.lent_out),
-          net_worth: round(cash + savings + extra.investments + extra.lent_out - cardOwed - extra.debts),
+          net_worth: round(cash + savings + investments + extra.lent_out - cardOwed - extra.debts),
         },
-        note: "A credit card's balance is the amount owed on it.",
+        note:
+          "A credit card's balance is the amount owed on it." +
+          (stale.length ? ` Live prices were unavailable for ${stale.join(", ")}, so their last known value is used.` : ""),
       };
     })
   );
@@ -508,20 +526,13 @@ function buildServer() {
 
   server.tool(
     "investments",
-    "Active investments with amount put in, current value, gain or loss, dividends, expected return and maturity.",
+    "Active investments with amount put in (cost basis), current value, gain or loss, dividends, expected return and maturity. Crypto is valued at quantity × the live CoinGecko price; stale: true means the live price was unavailable and the last known value (as of priced_at) is shown.",
     {},
     safe(async () => {
-      const rows = await query(
-        `SELECT name, type::text AS type, platform, principal_amount, current_value, dividends_received,
-                expected_return_rate, (maturity_date AT TIME ZONE $2)::date AS maturity_date, currency,
-                coin_symbol, quantity
-         FROM public.investments WHERE owner_id = $1 AND status = 'active'
-         ORDER BY current_value DESC`
-      );
-      return rows.map((r) => ({
-        ...r,
-        gain: round(r.current_value - r.principal_amount + r.dividends_received),
-      }));
+      const rows = await activeInvestments();
+      return rows
+        .sort((a, b) => b.current_value - a.current_value)
+        .map((r) => ({ ...r, gain: round(r.current_value - r.principal_amount) }));
     })
   );
 
