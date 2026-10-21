@@ -7,6 +7,7 @@ import { timingSafeEqual } from "node:crypto";
 import { registerPlannedItems } from "./planned-items.js";
 import { registerSafeToSpend } from "./tools/safe-to-spend.js";
 import { valueHoldings, type Holding } from "./crypto.js";
+import { registerGoalsTools } from "./goals.js";
 
 // ---------- config ----------
 const env = (k: string, d = "") => (process.env[k] ?? d).trim();
@@ -610,6 +611,7 @@ function buildServer() {
   );
 
   registerPlannedItems(server, { query, safe, dateStr, round, today, yearEnd });
+  registerGoalsTools(server, { query, safe, round });
 
   return server;
 }
