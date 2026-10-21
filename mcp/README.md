@@ -20,6 +20,7 @@ help you plan savings. It is built for Fico's real schema (the migrations in
 | `debts_and_loans` | Money you owe and money you lent, with installments and due dates. |
 | `investments` | Investments with amount in, current value and gain. |
 | `savings_forecast` | How much you can save by a date (default next January 1), with the inputs behind the number. |
+| `goals_progress` | Savings goals from the Goals page: saved so far (balance of the linked wallets, or every savings wallet when none are linked), remaining, months left and the monthly amount needed. |
 
 How it reads Fico's data: only `completed` transactions count (pending rows are
 future bill payments, cancelled ones never happened), income and expense come
