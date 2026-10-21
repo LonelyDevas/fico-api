@@ -16,6 +16,7 @@ help you plan savings. It is built for Fico's real schema (the migrations in
 | `spending_trends` | Each category's spend per month, its average, whether it is rising, and this month so far. |
 | `top_expenses` | Biggest single expenses, and repeated purchases that add up. |
 | `upcoming_bills` | Unpaid bills and expected income up to a date, recurring ones projected forward, plus your recurring costs per month. |
+| `safe_to_spend` | Cash on hand minus bills due before the next salary (or a date you give), as a total and per day, with a 20% buffer option. |
 | `budgets_status` | Active budgets: limit, spent, left, percent used. |
 | `debts_and_loans` | Money you owe and money you lent, with installments and due dates. |
 | `investments` | Investments with amount in, current value and gain. |

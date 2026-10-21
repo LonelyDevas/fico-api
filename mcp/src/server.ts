@@ -4,6 +4,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { timingSafeEqual } from "node:crypto";
+import { registerSafeToSpend } from "./tools/safe-to-spend.js";
 
 // ---------- config ----------
 const env = (k: string, d = "") => (process.env[k] ?? d).trim();
@@ -468,6 +469,8 @@ function buildServer() {
       };
     })
   );
+
+  registerSafeToSpend(server, { query, scheduled, safe, today, dayBefore, round, dateStr, TODAY });
 
   server.tool(
     "budgets_status",
