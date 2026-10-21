@@ -20,6 +20,7 @@ help you plan savings. It is built for Fico's real schema (the migrations in
 | `debts_and_loans` | Money you owe and money you lent, with installments and due dates. |
 | `investments` | Investments with amount in, current value and gain. |
 | `savings_forecast` | How much you can save by a date (default next January 1), with the inputs behind the number. |
+| `net_worth_history` | Net worth and its parts over time (daily, weekly or monthly), from the daily snapshots in `net_worth_snapshots`. |
 
 How it reads Fico's data: only `completed` transactions count (pending rows are
 future bill payments, cancelled ones never happened), income and expense come

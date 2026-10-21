@@ -594,6 +594,62 @@ function buildServer() {
     })
   );
 
+  server.tool(
+    "net_worth_history",
+    "Net worth over time from Fico's daily snapshots (taken at 23:55 Manila time): net worth plus cash on hand, savings, investments, credit card owed, debts and money lent out at each point, ready to chart. Weekly and monthly use the last snapshot in each period. Also returns the change over the range.",
+    {
+      from: dateStr.optional().describe("Inclusive start, YYYY-MM-DD, default 90 days ago"),
+      until: dateStr.optional().describe("Inclusive end, YYYY-MM-DD, default today"),
+      interval: z.enum(["daily", "weekly", "monthly"]).default("daily"),
+    },
+    safe(async ({ from, until, interval }) => {
+      const end = until ?? today();
+      const start = from ?? new Date(Date.parse(end) - 90 * 86400000).toISOString().slice(0, 10);
+      const unit = { daily: "day", weekly: "week", monthly: "month" }[interval];
+      const rows = await query(
+        `SELECT DISTINCT ON (date_trunc($5, s.snapshot_date::timestamp))
+                s.snapshot_date AS date, s.net_worth, s.cash_on_hand, s.savings, s.investments,
+                s.credit_card_owed, s.debts_owed, s.lent_out, s.investments_stale
+         FROM public.net_worth_snapshots s
+         WHERE s.owner_id = $1 AND s.snapshot_date BETWEEN $3::date AND LEAST($4::date, ${TODAY})
+         ORDER BY date_trunc($5, s.snapshot_date::timestamp), s.snapshot_date DESC`,
+        [start, end, unit]
+      );
+      const points = rows.map((r) => ({
+        ...r,
+        net_worth: round(r.net_worth),
+        cash_on_hand: round(r.cash_on_hand),
+        savings: round(r.savings),
+        investments: round(r.investments),
+        credit_card_owed: round(r.credit_card_owed),
+        debts_owed: round(r.debts_owed),
+        lent_out: round(r.lent_out),
+        investments_stale: r.investments_stale || undefined,
+      }));
+      const first = points[0];
+      const last = points[points.length - 1];
+      return {
+        from: start,
+        until: end,
+        interval,
+        points,
+        change: first
+          ? {
+              from_date: first.date,
+              to_date: last.date,
+              amount: round(last.net_worth - first.net_worth),
+              percent: first.net_worth ? round(((last.net_worth - first.net_worth) / Math.abs(first.net_worth)) * 100) : null,
+            }
+          : null,
+        notes: [
+          "Net worth = cash on hand + savings + investments + lent out - credit card owed - debts, the same as accounts_overview.",
+          "investments_stale marks points where a crypto price was more than 2 hours old when the snapshot was taken.",
+          ...(points.length ? [] : ["No snapshots in this range yet. They start on the day the snapshot job was set up."]),
+        ],
+      };
+    })
+  );
+
   return server;
 }
 
