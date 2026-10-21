@@ -24,6 +24,9 @@ help you plan savings. It is built for Fico's real schema (the migrations in
 | `investments` | Investments with amount in (cost basis), current value and gain. Crypto uses the live price. |
 | `savings_forecast` | How much you can save by a date (default next January 1), with the inputs behind the number. |
 | `goals_progress` | Savings goals from the Goals page: saved so far (balance of the linked wallets, or every savings wallet when none are linked), remaining, months left and the monthly amount needed. |
+| `savings_forecast` | How much you can save by a date (default next January 1), using baseline spending, with the inputs behind the number. |
+| `baseline_spending` | Normal monthly spending over the last N full months (default 3), split into fixed and variable. Leaves out transactions and categories flagged "Leave out of baseline" in Fico, transfers and credit card payments. |
+| `runway` | Move-in cost for a rented place (rent, deposit and advance months, setup costs), cash left after moving in, and how many months it lasts at baseline spending plus rent. |
 
 How it reads Fico's data: only `completed` transactions count (pending rows are
 future bill payments, cancelled ones never happened), income and expense come
