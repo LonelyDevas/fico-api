@@ -1,7 +1,7 @@
 // Sends bill reminders as web-push notifications.
 //
 // Two ways in:
-//  - Scheduled (daily): called with the header `x-cron-secret: <CRON_SECRET>`. Builds one digest per
+//  - Scheduled (daily, 09:00 Manila; see migrations/0056_schedule_notifications.sql): called with the header `x-cron-secret: <CRON_SECRET>`. Builds one digest per
 //    user from their unpaid bills that are overdue or due within their reminder window.
 //  - Test: a signed-in user calls it with { "test": true } and gets a test notification on their
 //    own devices.

@@ -1,6 +1,6 @@
 // Sends each user a short spending update as a web-push notification.
 //
-// Called by pg_cron with the header `x-cron-secret: <CRON_SECRET>` (see scripts/schedule-spending-digest.sql).
+// Called by pg_cron with the header `x-cron-secret: <CRON_SECRET>` (scheduled in migrations/0056_schedule_notifications.sql).
 // Only users who turned on notifications (they have a push_subscriptions row) are sent one.
 // "Today" and "this month" follow Manila time (UTC+8).
 //
