@@ -2,7 +2,8 @@
 //
 // Two ways in:
 //  - Scheduled (daily, 09:00 Manila; see migrations/0056_schedule_notifications.sql): called with the header `x-cron-secret: <CRON_SECRET>`. Builds one digest per
-//    user from their unpaid bills that are overdue or due within their reminder window.
+//    user from their unpaid bills and open debts/loans that are overdue, due within the reminder
+//    window, or due in exactly a week.
 //  - Test: a signed-in user calls it with { "test": true } and gets a test notification on their
 //    own devices.
 //
@@ -73,29 +74,56 @@ Deno.serve(async (req) => {
     .in("payment_status", ["unpaid", "overdue", "partial"]);
   if (error) return jsonResponse({ error: error.message }, 500);
 
+  // Debts and loans with a single due date. Installment ones are reminded through their installment bills.
+  const { data: obligations, error: obligationsError } = await db
+    .from("obligations")
+    .select("owner_id, name, counterparty, direction, due_date")
+    .eq("is_installment", false)
+    .not("due_date", "is", null)
+    .in("status", ["active", "partially_paid"]);
+  if (obligationsError) return jsonResponse({ error: obligationsError.message }, 500);
+
   const now = Date.now();
   const day = 86_400_000;
-  const perUser = new Map<string, { overdue: string[]; soon: string[] }>();
-  for (const bill of bills ?? []) {
-    const daysLeft = Math.ceil((new Date(bill.due_date).getTime() - now) / day);
-    const window = bill.reminder_days ?? 3;
-    if (daysLeft > window) continue;
-    const entry = perUser.get(bill.owner_id) ?? { overdue: [], soon: [] };
-    (daysLeft < 0 ? entry.overdue : entry.soon).push(bill.name);
-    perUser.set(bill.owner_id, entry);
+  // Daily inside the reminder window (and while overdue), plus a one-off heads up a week out.
+  const WEEK_AHEAD = 7;
+  type Due = { overdue: string[]; soon: string[]; nextWeek: string[] };
+  const emptyDue = (): Due => ({ overdue: [], soon: [], nextWeek: [] });
+  const perUser = new Map<string, { pay: Due; collect: Due; hasBills: boolean }>();
+  const add = (ownerId: string, side: "pay" | "collect", name: string, dueDate: string, window: number, isBill: boolean) => {
+    const daysLeft = Math.ceil((new Date(dueDate).getTime() - now) / day);
+    const weekAhead = daysLeft === WEEK_AHEAD && window < WEEK_AHEAD;
+    if (daysLeft > window && !weekAhead) return;
+    const entry = perUser.get(ownerId) ?? { pay: emptyDue(), collect: emptyDue(), hasBills: false };
+    const due = entry[side];
+    (daysLeft < 0 ? due.overdue : weekAhead ? due.nextWeek : due.soon).push(name);
+    entry.hasBills ||= isBill;
+    perUser.set(ownerId, entry);
+  };
+  for (const bill of bills ?? []) add(bill.owner_id, "pay", bill.name, bill.due_date, bill.reminder_days ?? 3, true);
+  for (const o of obligations ?? []) {
+    // A debt is money the user owes; a lending is money owed to them.
+    if (o.direction === "debt") add(o.owner_id, "pay", `${o.name} to ${o.counterparty}`, o.due_date, 3, false);
+    else add(o.owner_id, "collect", o.counterparty, o.due_date, 3, false);
   }
 
+  const list = (names: string[]) => `${names.slice(0, 2).join(", ")}${names.length > 2 ? "…" : ""}`;
   let notified = 0;
-  for (const [ownerId, { overdue, soon }] of perUser) {
+  for (const [ownerId, { pay, collect, hasBills }] of perUser) {
     const { data: subs } = await db.from("push_subscriptions").select("*").eq("owner_id", ownerId);
     if (!subs?.length) continue;
     const parts: string[] = [];
-    if (overdue.length) parts.push(`${overdue.length} overdue (${overdue.slice(0, 2).join(", ")}${overdue.length > 2 ? "…" : ""})`);
-    if (soon.length) parts.push(`${soon.length} due soon (${soon.slice(0, 2).join(", ")}${soon.length > 2 ? "…" : ""})`);
+    if (pay.overdue.length) parts.push(`${pay.overdue.length} overdue (${list(pay.overdue)})`);
+    if (pay.soon.length) parts.push(`${pay.soon.length} due soon (${list(pay.soon)})`);
+    if (pay.nextWeek.length) parts.push(`${pay.nextWeek.length} due in a week (${list(pay.nextWeek)})`);
+    if (collect.overdue.length) parts.push(`overdue to collect from ${list(collect.overdue)}`);
+    if (collect.soon.length) parts.push(`soon to collect from ${list(collect.soon)}`);
+    if (collect.nextWeek.length) parts.push(`to collect in a week from ${list(collect.nextWeek)}`);
+    const overdue = pay.overdue.length + collect.overdue.length > 0;
     notified += await sendTo(db, subs, {
-      title: overdue.length ? "Bills need attention" : "Bills coming up",
+      title: overdue ? "Payments need attention" : "Payments coming up",
       body: parts.join(" and "),
-      url: "/bills",
+      url: hasBills ? "/bills" : "/debts",
       tag: "fico-bills",
     });
   }
