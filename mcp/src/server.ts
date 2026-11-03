@@ -8,6 +8,7 @@ import { registerPlannedItems } from "./planned-items.js";
 import { registerSafeToSpend } from "./tools/safe-to-spend.js";
 import { valueHoldings, type Holding } from "./crypto.js";
 import { registerGoalsTools } from "./goals.js";
+import { registerWishlist } from "./wishlist.js";
 import { baselineSpending, registerBaselineTools } from "./baseline.js";
 
 // ---------- config ----------
@@ -619,6 +620,7 @@ function buildServer() {
 
   registerPlannedItems(server, { query, safe, dateStr, round, today, yearEnd });
   registerGoalsTools(server, { query, safe, round });
+  registerWishlist(server, { query, safe, round });
   registerBaselineTools(server, { query, today, round, safe });
   server.tool(
     "net_worth_history",
