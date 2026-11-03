@@ -78,7 +78,13 @@ Deno.serve(async (req) => {
     if (today > 0 && avg > 0) body += today > avg * 1.5 ? " — a heavy day." : ".";
     else body += ".";
 
-    const payload = JSON.stringify({ title: "Your spending", body, url: "/transactions", tag: "fico-spending" });
+    // The evening run (20:00 Manila) is the check-in: it opens Home with a one-tap check-in sheet.
+    const evening = local.getUTCHours() >= 18;
+    const payload = JSON.stringify(
+      evening
+        ? { title: "Evening check-in", body: `${body} Tap to check in.`, url: "/dashboard?checkin=1", tag: "fico-checkin" }
+        : { title: "Your spending", body, url: "/transactions", tag: "fico-spending" },
+    );
     for (const sub of devices) {
       try {
         await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, payload);
