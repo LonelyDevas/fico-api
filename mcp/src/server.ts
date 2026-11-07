@@ -236,11 +236,12 @@ async function activeInvestments() {
             expected_return_rate, (maturity_date AT TIME ZONE $2)::date AS maturity_date, currency,
             coin_id, coin_symbol, quantity,
             (to_jsonb(i) ->> 'last_price')::numeric AS stored_price,
-            to_jsonb(i) ->> 'price_updated_at' AS stored_priced_at
+            to_jsonb(i) ->> 'price_updated_at' AS stored_priced_at,
+            to_jsonb(i) ->> 'updated_at' AS saved_at
      FROM public.investments i WHERE owner_id = $1 AND status = 'active'`
   );
   const values = await valueHoldings(rows);
-  return rows.map(({ coin_id, stored_price, stored_priced_at, ...r }, i) => ({ ...r, ...values[i] }));
+  return rows.map(({ coin_id, stored_price, stored_priced_at, saved_at, ...r }, i) => ({ ...r, ...values[i] }));
 }
 
 // ---------- MCP server ----------

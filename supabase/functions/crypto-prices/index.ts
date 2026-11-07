@@ -1,14 +1,13 @@
 // Revalues every active crypto holding at the live CoinGecko price: current_value = quantity × price.
 //
-// Called by pg_cron with the header `x-cron-secret: <CRON_SECRET>`, every 30 minutes:
-//   select cron.schedule('crypto-prices', '*/30 * * * *', $$
-//     select net.http_post(
-//       url := 'https://<project-ref>.supabase.co/functions/v1/crypto-prices',
-//       headers := jsonb_build_object('x-cron-secret', '<CRON_SECRET>')
-//     ) $$);
-// One CoinGecko request per currency covers every holding. If a request fails, or a coin has no
+// Called by pg_cron with the header `x-cron-secret: <CRON_SECRET>` every 30 minutes (scheduled in
+// migrations/0070_schedule_crypto_prices.sql).
+// One CoinGecko request per currency covers every holding. Coins CoinGecko leaves out (or all of
+// them, when it rate-limits) are asked of Coinbase's public exchange rates by ticker. If both fail, or a coin has no
 // price, those rows are left as they are, so current_value keeps the last known value and
 // price_updated_at shows how old it is. principal_amount (the cost basis) is never touched.
+// The first good price of each Manila day is also saved as a value snapshot, so the app can work out
+// returns over Today, 1W, 1M and so on for crypto too.
 //
 // Secrets: CRON_SECRET (shared with bill-reminders), optional COINGECKO_KEY (free demo key).
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
@@ -29,6 +28,23 @@ const SYMBOL_IDS: Record<string, string> = {
 
 const coinOf = (h: { coin_id: string | null; coin_symbol: string | null }) =>
   h.coin_id || SYMBOL_IDS[(h.coin_symbol ?? "").toUpperCase()] || null;
+const ID_SYMBOLS = Object.fromEntries(Object.entries(SYMBOL_IDS).map(([sym, id]) => [id, sym]));
+const tickerOf = (h: { coin_id: string | null; coin_symbol: string | null }) =>
+  (h.coin_symbol || ID_SYMBOLS[coinOf(h) ?? ""] || "").toUpperCase();
+
+// Coinbase's public rates for one ticker: { data: { rates: { PHP: "3512345.67", ... } } }.
+async function coinbasePrice(ticker: string, vs: string): Promise<number | null> {
+  if (!ticker) return null;
+  try {
+    const res = await fetch(`https://api.coinbase.com/v2/exchange-rates?currency=${encodeURIComponent(ticker)}`);
+    if (!res.ok) return null;
+    const json = (await res.json()) as { data?: { rates?: Record<string, string> } };
+    const price = Number(json.data?.rates?.[vs.toUpperCase()]);
+    return price > 0 ? price : null;
+  } catch {
+    return null;
+  }
+}
 
 async function fetchPrices(ids: string[], vs: string): Promise<Record<string, number>> {
   const params = new URLSearchParams({ ids: ids.join(","), vs_currencies: vs });
@@ -67,15 +83,30 @@ Deno.serve(async (req) => {
     byCurrency.set(vs, [...(byCurrency.get(vs) ?? []), h]);
   }
 
+  // Holdings that already have a snapshot today (Manila), so only the first run of the day adds one.
+  const manilaMidnight = new Date(Math.floor((Date.now() + 8 * 3_600_000) / 86_400_000) * 86_400_000 - 8 * 3_600_000);
+  const { data: todays } = await db
+    .from("investment_value_snapshots")
+    .select("investment_id")
+    .in("investment_id", (holdings ?? []).map((h) => h.id))
+    .gte("snapshot_date", manilaMidnight.toISOString());
+  const snappedToday = new Set((todays ?? []).map((r) => r.investment_id));
+
   let updated = 0;
+  let snapshots = 0;
   const failed: string[] = [];
   for (const [vs, rows] of byCurrency) {
-    let prices: Record<string, number>;
+    let prices: Record<string, number> = {};
     try {
       prices = await fetchPrices([...new Set(rows.map((h) => coinOf(h)!))].sort(), vs);
     } catch (err) {
-      failed.push(`${vs}: ${(err as Error).message}`);
-      continue;
+      failed.push(`${vs}: ${(err as Error).message}, trying Coinbase`);
+    }
+    for (const h of rows) {
+      const id = coinOf(h)!;
+      if (prices[id]) continue;
+      const price = await coinbasePrice(tickerOf(h), vs);
+      if (price) prices[id] = price;
     }
     const now = new Date().toISOString();
     for (const h of rows) {
@@ -92,9 +123,22 @@ Deno.serve(async (req) => {
           price_updated_at: now,
         })
         .eq("id", h.id);
-      if (updateError) failed.push(`${h.id}: ${updateError.message}`);
-      else updated++;
+      if (updateError) {
+        failed.push(`${h.id}: ${updateError.message}`);
+        continue;
+      }
+      updated++;
+      if (!snappedToday.has(h.id)) {
+        const { error: snapError } = await db.from("investment_value_snapshots").insert({
+          investment_id: h.id,
+          value: Math.round(Number(h.quantity) * price * 100) / 100,
+          snapshot_date: now,
+          notes: "Daily price",
+        });
+        if (snapError) failed.push(`${h.id} snapshot: ${snapError.message}`);
+        else snapshots++;
+      }
     }
   }
-  return jsonResponse({ holdings: holdings?.length ?? 0, updated, failed });
+  return jsonResponse({ holdings: holdings?.length ?? 0, updated, snapshots, failed });
 });

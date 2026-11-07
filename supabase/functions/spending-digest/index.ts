@@ -1,7 +1,9 @@
 // Sends each user a short spending update as a web-push notification.
 //
-// Called by pg_cron with the header `x-cron-secret: <CRON_SECRET>` (scheduled in migrations/0056_schedule_notifications.sql).
+// Called every hour by pg_cron with the header `x-cron-secret: <CRON_SECRET>` (0056, made hourly in 0069).
 // Only users who turned on notifications (they have a push_subscriptions row) are sent one.
+// Each user gets an update at 08:00 and 14:00, and the evening check-in at the hour they picked
+// (push_subscriptions.checkin_hour, 20:00 by default). Other hours send nothing.
 // "Today" and "this month" follow Manila time (UTC+8).
 //
 // Secrets: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT, CRON_SECRET (shared with bill-reminders).
@@ -35,6 +37,8 @@ Deno.serve(async (req) => {
   const dayStart = manilaMidnight(y, m, d).getTime();
   const monthStart = manilaMidnight(y, m, 1);
   const daysElapsed = d;
+  const hour = local.getUTCHours();
+  const DAY_UPDATES = [8, 14];
 
   const { data: subs, error } = await db.from("push_subscriptions").select("*");
   if (error) return jsonResponse({ error: error.message }, 500);
@@ -47,6 +51,11 @@ Deno.serve(async (req) => {
 
   let notified = 0;
   for (const [ownerId, devices] of byOwner) {
+    // Before 0069 there is no checkin_hour, and the old three-a-day schedule lands on 20:00.
+    const checkinHour = Number(devices?.[0]?.checkin_hour ?? 20);
+    const evening = hour === checkinHour;
+    if (!evening && !DAY_UPDATES.includes(hour)) continue;
+
     const { data: txs } = await db
       .from("transactions")
       .select("amount, date, category_id")
@@ -54,12 +63,12 @@ Deno.serve(async (req) => {
       .eq("type", "expense")
       .eq("status", "completed")
       .gte("date", monthStart.toISOString());
-    if (!txs?.length) continue;
+    if (!txs?.length && !evening) continue;
 
     let today = 0;
     let month = 0;
     const byCat = new Map<string, number>();
-    for (const t of txs) {
+    for (const t of txs ?? []) {
       const amt = Number(t.amount);
       month += amt;
       if (new Date(t.date).getTime() >= dayStart) {
@@ -78,8 +87,7 @@ Deno.serve(async (req) => {
     if (today > 0 && avg > 0) body += today > avg * 1.5 ? " — a heavy day." : ".";
     else body += ".";
 
-    // The evening run (20:00 Manila) is the check-in: it opens Home with a one-tap check-in sheet.
-    const evening = local.getUTCHours() >= 18;
+    // The check-in opens Home with a one-tap check-in sheet.
     const payload = JSON.stringify(
       evening
         ? { title: "Evening check-in", body: `${body} Tap to check in.`, url: "/dashboard?checkin=1", tag: "fico-checkin" }
