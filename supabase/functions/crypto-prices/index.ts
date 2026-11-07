@@ -1,12 +1,9 @@
 // Revalues every active crypto holding at the live CoinGecko price: current_value = quantity × price.
 //
-// Called by pg_cron with the header `x-cron-secret: <CRON_SECRET>`, every 30 minutes:
-//   select cron.schedule('crypto-prices', '*/30 * * * *', $$
-//     select net.http_post(
-//       url := 'https://<project-ref>.supabase.co/functions/v1/crypto-prices',
-//       headers := jsonb_build_object('x-cron-secret', '<CRON_SECRET>')
-//     ) $$);
-// One CoinGecko request per currency covers every holding. If a request fails, or a coin has no
+// Called by pg_cron with the header `x-cron-secret: <CRON_SECRET>` every 30 minutes (scheduled in
+// migrations/0070_schedule_crypto_prices.sql).
+// One CoinGecko request per currency covers every holding. Coins CoinGecko leaves out (or all of
+// them, when it rate-limits) are asked of Coinbase's public exchange rates by ticker. If both fail, or a coin has no
 // price, those rows are left as they are, so current_value keeps the last known value and
 // price_updated_at shows how old it is. principal_amount (the cost basis) is never touched.
 //
@@ -29,6 +26,23 @@ const SYMBOL_IDS: Record<string, string> = {
 
 const coinOf = (h: { coin_id: string | null; coin_symbol: string | null }) =>
   h.coin_id || SYMBOL_IDS[(h.coin_symbol ?? "").toUpperCase()] || null;
+const ID_SYMBOLS = Object.fromEntries(Object.entries(SYMBOL_IDS).map(([sym, id]) => [id, sym]));
+const tickerOf = (h: { coin_id: string | null; coin_symbol: string | null }) =>
+  (h.coin_symbol || ID_SYMBOLS[coinOf(h) ?? ""] || "").toUpperCase();
+
+// Coinbase's public rates for one ticker: { data: { rates: { PHP: "3512345.67", ... } } }.
+async function coinbasePrice(ticker: string, vs: string): Promise<number | null> {
+  if (!ticker) return null;
+  try {
+    const res = await fetch(`https://api.coinbase.com/v2/exchange-rates?currency=${encodeURIComponent(ticker)}`);
+    if (!res.ok) return null;
+    const json = (await res.json()) as { data?: { rates?: Record<string, string> } };
+    const price = Number(json.data?.rates?.[vs.toUpperCase()]);
+    return price > 0 ? price : null;
+  } catch {
+    return null;
+  }
+}
 
 async function fetchPrices(ids: string[], vs: string): Promise<Record<string, number>> {
   const params = new URLSearchParams({ ids: ids.join(","), vs_currencies: vs });
@@ -70,12 +84,17 @@ Deno.serve(async (req) => {
   let updated = 0;
   const failed: string[] = [];
   for (const [vs, rows] of byCurrency) {
-    let prices: Record<string, number>;
+    let prices: Record<string, number> = {};
     try {
       prices = await fetchPrices([...new Set(rows.map((h) => coinOf(h)!))].sort(), vs);
     } catch (err) {
-      failed.push(`${vs}: ${(err as Error).message}`);
-      continue;
+      failed.push(`${vs}: ${(err as Error).message}, trying Coinbase`);
+    }
+    for (const h of rows) {
+      const id = coinOf(h)!;
+      if (prices[id]) continue;
+      const price = await coinbasePrice(tickerOf(h), vs);
+      if (price) prices[id] = price;
     }
     const now = new Date().toISOString();
     for (const h of rows) {
