@@ -6,6 +6,8 @@
 // them, when it rate-limits) are asked of Coinbase's public exchange rates by ticker. If both fail, or a coin has no
 // price, those rows are left as they are, so current_value keeps the last known value and
 // price_updated_at shows how old it is. principal_amount (the cost basis) is never touched.
+// The first good price of each Manila day is also saved as a value snapshot, so the app can work out
+// returns over Today, 1W, 1M and so on for crypto too.
 //
 // Secrets: CRON_SECRET (shared with bill-reminders), optional COINGECKO_KEY (free demo key).
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
@@ -81,7 +83,17 @@ Deno.serve(async (req) => {
     byCurrency.set(vs, [...(byCurrency.get(vs) ?? []), h]);
   }
 
+  // Holdings that already have a snapshot today (Manila), so only the first run of the day adds one.
+  const manilaMidnight = new Date(Math.floor((Date.now() + 8 * 3_600_000) / 86_400_000) * 86_400_000 - 8 * 3_600_000);
+  const { data: todays } = await db
+    .from("investment_value_snapshots")
+    .select("investment_id")
+    .in("investment_id", (holdings ?? []).map((h) => h.id))
+    .gte("snapshot_date", manilaMidnight.toISOString());
+  const snappedToday = new Set((todays ?? []).map((r) => r.investment_id));
+
   let updated = 0;
+  let snapshots = 0;
   const failed: string[] = [];
   for (const [vs, rows] of byCurrency) {
     let prices: Record<string, number> = {};
@@ -111,9 +123,22 @@ Deno.serve(async (req) => {
           price_updated_at: now,
         })
         .eq("id", h.id);
-      if (updateError) failed.push(`${h.id}: ${updateError.message}`);
-      else updated++;
+      if (updateError) {
+        failed.push(`${h.id}: ${updateError.message}`);
+        continue;
+      }
+      updated++;
+      if (!snappedToday.has(h.id)) {
+        const { error: snapError } = await db.from("investment_value_snapshots").insert({
+          investment_id: h.id,
+          value: Math.round(Number(h.quantity) * price * 100) / 100,
+          snapshot_date: now,
+          notes: "Daily price",
+        });
+        if (snapError) failed.push(`${h.id} snapshot: ${snapError.message}`);
+        else snapshots++;
+      }
     }
   }
-  return jsonResponse({ holdings: holdings?.length ?? 0, updated, failed });
+  return jsonResponse({ holdings: holdings?.length ?? 0, updated, snapshots, failed });
 });
