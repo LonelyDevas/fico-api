@@ -16,13 +16,13 @@ export interface ToolDeps {
 export function registerPlannedItems(server: McpServer, { query, safe, dateStr, round, today, yearEnd }: ToolDeps) {
   server.tool(
     "planned_items",
-    "One-off income and expenses the user expects but that aren't on the Bills page (13th month pay, birthday or Christmas money, trips, visits), each with a low and a high estimate and a status (expected or confirmed). Returns the items between two dates plus totals for a low case (least income, most spending) and a high case (most income, least spending). Add these on top of savings_forecast, which only knows past averages and scheduled bills.",
+    "One-off income and expenses the user expects but that aren't on the Bills page (13th month pay, birthday or Christmas money, trips, visits), each with a low and a high estimate and a status (expected, confirmed, or done = already paid or received). Returns the items between two dates plus totals for a low case (least income, most spending) and a high case (most income, least spending). Add these on top of savings_forecast, which only knows past averages and scheduled bills.",
     {
       from: dateStr.optional().describe("Inclusive start, YYYY-MM-DD, default today"),
       until: dateStr.optional().describe("Inclusive end, YYYY-MM-DD, default December 31 this year"),
-      status: z.enum(["expected", "confirmed"]).optional().describe("Only items with this status"),
+      status: z.enum(["expected", "confirmed", "done"]).optional().describe("Only items with this status"),
     },
-    safe(async ({ from, until, status }: { from?: string; until?: string; status?: "expected" | "confirmed" }) => {
+    safe(async ({ from, until, status }: { from?: string; until?: string; status?: "expected" | "confirmed" | "done" }) => {
       const start = from ?? today();
       const end = until ?? yearEnd();
       const rows = await query(
@@ -33,8 +33,10 @@ export function registerPlannedItems(server: McpServer, { query, safe, dateStr, 
          ORDER BY p.date, p.name`,
         [from ?? null, end, status ?? null]
       );
+      // Done items already show in wallet balances, so totals cover only what is still to happen.
+      const open = status === "done" ? rows : rows.filter((r) => r.status !== "done");
       const sum = (type: string, key: "amount_low" | "amount_high") =>
-        round(rows.filter((r) => r.type === type).reduce((s, r) => s + r[key], 0));
+        round(open.filter((r) => r.type === type).reduce((s, r) => s + r[key], 0));
       const income = { low: sum("income", "amount_low"), high: sum("income", "amount_high") };
       const expenses = { low: sum("expense", "amount_low"), high: sum("expense", "amount_high") };
       return {
@@ -51,6 +53,7 @@ export function registerPlannedItems(server: McpServer, { query, safe, dateStr, 
         notes: [
           "Amounts are PHP. low_case_net = lowest income minus highest spending; high_case_net = highest income minus lowest spending.",
           "Expected items may not happen; pass status 'confirmed' for only the sure ones.",
+          "Items with status 'done' are already paid or received and are left out of the totals.",
         ],
       };
     })
